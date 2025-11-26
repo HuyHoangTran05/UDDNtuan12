@@ -50,7 +50,7 @@ spec:
     spec:
       containers:
         - name: minio
-          image: quay.io/minio/minio:RELEASE.2024-10-02T09-19-22Z
+          image: docker.io/minio/minio:latest
           args:
             - server
             - "http://minio-{0...2}.minio-hl.minio.svc.cluster.local/data"
@@ -148,7 +148,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: mc
-          image: quay.io/minio/mc:RELEASE.2024-10-02T09-19-22Z
+          image: docker.io/minio/mc:latest
           command: ["/bin/sh","-c"]
           args: ["/script/init.sh"]
           env:
@@ -172,3 +172,53 @@ spec:
           configMap:
             name: minio-mc-script
             defaultMode: 0755
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-upload-csv
+  namespace: minio
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      volumes:
+        - name: work
+          emptyDir: {}
+      initContainers:
+        - name: fetch
+          image: curlimages/curl:8.7.1
+          command: ["sh","-c"]
+          args:
+            - |
+              set -e
+              url=${CSV_URL:-https://people.sc.fsu.edu/~jburkardt/data/csv/airtravel.csv}
+              echo "Downloading $url"
+              curl -L "$url" -o /work/airtravel.csv
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      containers:
+        - name: upload
+          image: docker.io/minio/mc:latest
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-root-secret
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-root-secret
+                  key: MINIO_ROOT_PASSWORD
+          command: ["sh","-c"]
+          args:
+            - |
+              set -e
+              mc alias set local http://minio-console.minio.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+              mc cp /work/airtravel.csv local/datasets/airtravel.csv
+              mc ls local/datasets
+          volumeMounts:
+            - name: work
+              mountPath: /work
